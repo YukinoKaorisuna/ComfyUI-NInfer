@@ -236,22 +236,27 @@ is unchanged, so decode speed is identical to running the engine standalone.
 
 ### Measured against a llama.cpp node
 
-Same machine, same 27B-class model, `max_context 4096`. Both engines warm — no cleanup node in
-front of the LLM — with 200–250 characters of output:
+Same machine, same 27B-class model, `max_context 4096`, byte-identical input, and a **randomised
+seed on every run** — ComfyUI reuses a cached output when inputs are unchanged, so a fixed seed
+measures nothing but the cache:
 
-| Task | This pack | `ComfyUI-LLM-text-processor` (llama.cpp, Qwen3.8-27B IQ4_XS, 14.63 GiB) |
-|---|---|---|
-| Translate a prompt (≈230 chars out) | **1.37 s** | 13.56 s |
-| Expand a prompt (≈200 chars out) | **3.56 s** | 16.80 s |
-| First run of a session (cold, 15 GB read) | 21.24 s | 32.55 s |
+| Task (chars produced) | This pack | `ComfyUI-LLM-text-processor` (llama.cpp, Qwen3.8-27B IQ4_XS, 14.63 GiB) | Speed-up |
+|---|---|---|---|
+| Expand a prompt (≈215) | **9.1 s** | 51.5 s | **5.6×** |
+| Translate a prompt (≈250) | **7.1 s** | 28.3 s | **4.0×** |
+| 4-shot storyboard (≈570) | **14.3 s** | 99.7 s | **7.0×** |
+| 8-shot script, 2048-token budget (≈5100) | **58.9 s** | did not finish within 600 s | — |
 
-**4–10× faster** on repeat runs. Most of the gap is the 15 GB reload: the engine stays resident
-here, while the llama.cpp path re-reads the model unless its own cache survives the run.
+The gap widens with the size of the job — a few times faster on short prompts, an order of
+magnitude on a full script. Cold starts (first run, 15 GB read) were 16.5 s vs 63.8 s.
+
+Both engines are ~15 GB, so **running two different LLM back-ends in one workflow makes each one
+evict the other**: expect a reload every time you switch between them.
 
 > [!WARNING]
 > **Do not put a cleanup node in front of the LLM.** A workflow containing `NInfer Free VRAM`
 > (or any VRAM-cleanup node) *before* the LLM node destroys the resident engine and forces a full
-> 15 GB reload every single run — measured at **15–21 s instead of 1.4–3.6 s**. Put it **after**
+> 15 GB reload every single run — measured at **16–25 s instead of 7–14 s**. Put it **after**
 > the LLM node, or leave it out and keep `keep_loaded` on.
 
 ### Versus the usual alternatives
