@@ -1,5 +1,7 @@
 # ComfyUI-NInfer
 
+English | **[简体中文](README.zh-CN.md)**
+
 Run [NInfer](https://github.com/Neroued/ninfer) LLMs inside ComfyUI's own process. No server, no
 subprocess, no Ollama — the engine is a native library loaded straight into ComfyUI via ctypes.
 It loads once and stays resident, so every call after the first costs 0 s.

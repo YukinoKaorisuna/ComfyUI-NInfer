@@ -1,5 +1,7 @@
 # ComfyUI-NInfer
 
+简体中文 | **[English](README.md)**
+
 把 [NInfer](https://github.com/Neroued/ninfer) 大模型跑在 ComfyUI **自己的进程里**。不起服务、不开子进程、
 不用 Ollama —— 引擎是一个原生库，通过 ctypes 直接加载进 ComfyUI。只加载一次并常驻，之后每次调用开销 0 秒。
 
