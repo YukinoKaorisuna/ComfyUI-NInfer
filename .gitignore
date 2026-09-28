@@ -1,0 +1,25 @@
+# Engine binaries (~250 MB) are fetched at install time, never committed.
+#   python tools/fetch_engine.py
+bin/*.dll
+bin/*.txt
+bin/*.zip
+_engine_download.zip
+
+# Staging output from tools/make_release.ps1
+build/
+
+# Source tree from tools/build_engine.ps1
+build/ninfer-src/
+build/ninfer-build/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

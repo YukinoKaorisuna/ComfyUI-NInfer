@@ -1,0 +1,8 @@
+# No third-party Python packages are required.
+#
+#   numpy, Pillow  -> already installed by ComfyUI (used to encode an IMAGE as JPEG)
+#   ctypes         -> Python standard library
+#
+# The inference engine is a native binary, not a pip package. Download it with:
+#
+#   python tools/fetch_engine.py

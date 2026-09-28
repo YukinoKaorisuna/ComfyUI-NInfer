@@ -1,0 +1,14 @@
+# Files excluded from the archive published to the ComfyUI Registry.
+# Same syntax as .gitignore. Keep the registry archive small: the 250 MB engine is a
+# GitHub Release asset that users download with tools/fetch_engine.py.
+
+bin/
+build/
+_engine_download.zip
+
+# Maintainer-only tooling — the fetch path is what users need.
+tools/make_release.ps1
+tools/build_engine.ps1
+
+__pycache__/
+*.py[cod]

@@ -1,0 +1,514 @@
+diff --git a/apps/CMakeLists.txt b/apps/CMakeLists.txt
+index ee290055..c9a086ba 100644
+--- a/apps/CMakeLists.txt
++++ b/apps/CMakeLists.txt
+@@ -45,3 +45,45 @@ if(WIN32)
+     endforeach()
+   endforeach()
+ endif()
++
++# --- Embeddable C ABI (host processes such as ComfyUI's Python runtime) ------------------
++# A plain DLL/so with extern "C" exports. ctypes / cffi load it into ANY Python process, so
++# it is independent of the host's Python version (unlike a CPython extension module). The
++# DLL is loaded *into* the host process and shares its CUDA context.
++#
++# Notes for the first build:
++#   * ninfer_engine and its dependencies are STATIC. Linking them into a SHARED target is
++#     what produces a self-contained DLL; CMake carries the private static dependencies
++#     onto the link line automatically.
++#   * The engine's CUDA archives use separable compilation, so device symbols must be
++#     resolved when the shared object is linked. The properties below request that. This
++#     is the part most likely to need adjustment against a specific CUDA/MSVC combination.
++#   * Media (FFmpeg, libcurl) is reached transitively through
++#     ninfer_engine -> ninfer_media_decode, so the av*/libcurl import libraries still
++#     appear on this link line. To ship a text-only DLL without them, make that dependency
++#     conditional in src/CMakeLists.txt.
++add_library(ninfer_capi SHARED
++  capi/ninfer_capi.cpp)
++target_include_directories(ninfer_capi PRIVATE
++  ${PROJECT_SOURCE_DIR}/include
++  ${PROJECT_SOURCE_DIR}/src)
++target_link_libraries(ninfer_capi PRIVATE ninfer_engine)
++set_target_properties(ninfer_capi PROPERTIES
++  PREFIX ""
++  CUDA_SEPARABLE_COMPILATION ON
++  CUDA_RESOLVE_DEVICE_SYMBOLS ON)
++
++# A ctypes host loads ninfer_capi.dll directly, so its own imports (avformat-*.dll,
++# avcodec-*.dll, avutil-*.dll, swscale-*.dll, libcurl.dll) must be resolvable too.
++# Without this they are simply absent from the DLL's directory and the load fails with
++# a bare "DLL load failed" — reuse the same runtime-prefix list the executables use.
++if(WIN32)
++  foreach(_prefix IN LISTS _ninfer_runtime_prefixes)
++    if(EXISTS "${_prefix}/bin")
++      add_custom_command(TARGET ninfer_capi POST_BUILD
++        COMMAND ${CMAKE_COMMAND} -E copy_directory
++                "${_prefix}/bin" "$<TARGET_FILE_DIR:ninfer_capi>"
++        COMMENT "Copying runtime DLLs next to ninfer_capi")
++    endif()
++  endforeach()
++endif()
+diff --git a/apps/capi/ninfer_capi.cpp b/apps/capi/ninfer_capi.cpp
+new file mode 100644
+index 00000000..3441d136
+--- /dev/null
++++ b/apps/capi/ninfer_capi.cpp
+@@ -0,0 +1,283 @@
++// NInfer C ABI — drive the ninfer Engine from a host process (e.g. ComfyUI's Python).
++//
++// Why this exists
++// ---------------
++// ninfer::Engine is a C++ library (see include/ninfer/engine.h). A Python host cannot
++// link it directly, and building a CPython extension would pin the DLL to a single
++// Python ABI. This target instead exposes a small extern "C" surface that ctypes/cffi
++// can load into ANY Python process.
++//
++// The DLL is loaded *into* the host process, so the engine shares that process's address
++// space and CUDA context — no IPC, no subprocess, no second GPU context to synchronise.
++//
++// Two options structs are used rather than long parameter lists, because they are plain
++// POD and ctypes can mirror their layout exactly.
++//
++// Build: apps/CMakeLists.txt defines the ninfer_capi SHARED target.
++
++#include "ninfer/engine.h"
++
++#include <cstdint>
++#include <cstring>
++#include <exception>
++#include <filesystem>
++#include <string>
++#include <utility>
++#include <vector>
++
++#if defined(_WIN32)
++#  define NINFER_CAPI_API __declspec(dllexport)
++#else
++#  define NINFER_CAPI_API __attribute__((visibility("default")))
++#endif
++
++namespace {
++
++// Accumulates streamed deltas into flat strings. The engine calls publish() while
++// generate() is running. The host serialises requests, so no locking is needed here.
++struct BufferSink final : ninfer::OutputSink {
++    std::string content;
++    std::string reasoning;
++
++    void publish(ninfer::OutputDelta delta) override {
++        if (delta.channel == ninfer::OutputChannel::Content) {
++            content.append(delta.text);
++        } else {
++            reasoning.append(delta.text);
++        }
++    }
++};
++
++struct Handle {
++    ninfer::Engine engine;
++    bool vision = false;
++
++    Handle(ninfer::EngineOptions options, bool vision_enabled)
++        : engine(std::move(options)), vision(vision_enabled) {}
++};
++
++// thread_local so concurrent hosts never clobber each other's diagnostic message.
++thread_local std::string g_last_error;
++
++ninfer::ChatMessage text_message(ninfer::ChatRole role, const char* utf8) {
++    ninfer::ChatMessage message;
++    message.role = role;
++    ninfer::MessagePart part;
++    part.kind = ninfer::MessagePartKind::Text;
++    part.text = (utf8 != nullptr) ? utf8 : "";
++    message.parts.push_back(std::move(part));
++    return message;
++}
++
++} // namespace
++
++extern "C" {
++
++// ---------------------------------------------------------------------------
++// Options structs (POD; keep in sync with the ctypes mirrors in the node code).
++// ---------------------------------------------------------------------------
++
++typedef struct NinferCreateOptions {
++    const char* artifact_path;  // UTF-8 path to the .ninfer artifact; required.
++    int32_t device;             // CUDA device index.
++    int32_t max_context;        // per-sequence logical context ceiling.
++    int32_t speculative_mtp;    // 0 = off; 1..5 = MTP draft tokens.
++    int32_t kv_tokens;          // explicit KV capacity; 0 = follow max_context.
++    int32_t enable_vision;      // loads the vision encoder (+~2 GB VRAM).
++    int32_t vision_max_tokens;  // 0 = runtime default.
++    int32_t embedding_host;     // 1 = keep token embedding in pinned host RAM (saves VRAM).
++    int32_t kv_dtype;           // 0 = bf16, 1 = int8 group64, 2 = int4 group64.
++    int32_t use_cuda_graph;     // 1 = enabled (default).
++} NinferCreateOptions;
++
++typedef struct NinferRequestOptions {
++    int32_t max_new_tokens;      // <= 0 -> 512.
++    int32_t enable_thinking;     // 0 disables the reasoning pass (the fast path).
++    float   temperature;         // < 0 -> model default.
++    int32_t top_k;               // < 0 -> model default.
++    float   top_p;               // < 0 -> model default.
++    float   min_p;               // < 0 -> model default.
++    float   presence_penalty;    // < 0 -> model default.
++    float   frequency_penalty;   // < 0 -> model default.
++    int64_t seed;                // < 0 -> random per request.
++} NinferRequestOptions;
++
++// ---------------------------------------------------------------------------
++// Exported surface
++// ---------------------------------------------------------------------------
++
++NINFER_CAPI_API const char* ninfer_last_error(void) {
++    return g_last_error.c_str();
++}
++
++// Loads an artifact and constructs the engine. This is the slow call (weights -> GPU).
++// Returns an opaque handle, or nullptr on failure (see ninfer_last_error()).
++NINFER_CAPI_API void* ninfer_create(const NinferCreateOptions* options) {
++    g_last_error.clear();
++    if (options == nullptr || options->artifact_path == nullptr) {
++        g_last_error = "create options (or artifact_path) must not be null";
++        return nullptr;
++    }
++
++    try {
++        const std::uint32_t context =
++            static_cast<std::uint32_t>(options->max_context > 0 ? options->max_context : 8192);
++        const bool vision = (options->enable_vision != 0);
++
++        ninfer::EngineOptions engine_options;
++        // The host passes UTF-8. On Windows std::filesystem::path needs a wide string,
++        // and u8string is the portable way to say "these bytes are UTF-8".
++        engine_options.artifact_path = std::filesystem::path(
++            std::u8string(reinterpret_cast<const char8_t*>(options->artifact_path)));
++
++        engine_options.device      = options->device;
++        engine_options.max_context = context;
++        engine_options.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(
++            static_cast<std::uint32_t>(options->kv_tokens > 0 ? options->kv_tokens : context));
++
++        engine_options.enable_vision     = vision;
++        engine_options.vision_max_tokens = static_cast<std::uint32_t>(
++            options->vision_max_tokens > 0 ? options->vision_max_tokens : 0);
++        engine_options.embedding_host    = (options->embedding_host != 0);
++        engine_options.use_cuda_graph    = (options->use_cuda_graph != 0);
++
++        switch (options->kv_dtype) {
++        case 1:  engine_options.kv_cache = ninfer::KvCacheStorage::Int8Group64; break;
++        case 2:  engine_options.kv_cache = ninfer::KvCacheStorage::Int4Group64; break;
++        default: engine_options.kv_cache = ninfer::KvCacheStorage::BFloat16;    break;
++        }
++
++        if (options->speculative_mtp > 0) {
++            engine_options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
++            engine_options.speculative.draft_tokens = static_cast<std::uint32_t>(
++                options->speculative_mtp > 5 ? 5 : options->speculative_mtp);
++        }
++
++        return new Handle(std::move(engine_options), vision);
++    } catch (const std::exception& error) {
++        g_last_error = error.what();
++        return nullptr;
++    } catch (...) {
++        g_last_error = "unknown error while loading the engine";
++        return nullptr;
++    }
++}
++
++// True when the engine was created with vision enabled.
++NINFER_CAPI_API int32_t ninfer_has_vision(void* handle) {
++    if (handle == nullptr) {
++        return 0;
++    }
++    return static_cast<Handle*>(handle)->vision ? 1 : 0;
++}
++
++// Runs one single-turn generation, with an optional image.
++//
++// Returns the number of bytes written to out_buf (excluding the terminating NUL), or -1
++// on failure. Nothing is thrown across the ABI.
++//
++//   image_bytes : encoded image payload (JPEG/BMP — the bundled FFmpeg has no PNG
++//                 decoder). Pass NULL with image_len 0 for a text-only request; doing so
++//                 on an engine created without vision is an error.
++//   image_mime  : e.g. "image/jpeg"; NULL defaults to "image/jpeg".
++NINFER_CAPI_API int32_t ninfer_generate(void* handle,
++                        const char* system_text_utf8,
++                        const char* user_text_utf8,
++                        const unsigned char* image_bytes,
++                        int32_t image_len,
++                        const char* image_mime,
++                        const NinferRequestOptions* request,
++                        char* out_buf,
++                        int32_t out_cap) {
++    g_last_error.clear();
++    if (handle == nullptr) {
++        g_last_error = "handle must not be null";
++        return -1;
++    }
++    if (out_buf == nullptr || out_cap <= 0) {
++        g_last_error = "output buffer must not be null or empty";
++        return -1;
++    }
++
++    try {
++        auto* self = static_cast<Handle*>(handle);
++        const bool has_image = (image_bytes != nullptr && image_len > 0);
++
++        if (has_image && !self->vision) {
++            g_last_error =
++                "engine was created without vision; recreate it with enable_vision=1";
++            return -1;
++        }
++
++        ninfer::PromptInput input;
++        if (system_text_utf8 != nullptr && *system_text_utf8 != '\0') {
++            input.messages.push_back(text_message(ninfer::ChatRole::System, system_text_utf8));
++        }
++
++        // User turn: media first, then the instruction text.
++        ninfer::ChatMessage user_message;
++        user_message.role = ninfer::ChatRole::User;
++        if (has_image) {
++            ninfer::MessagePart media_part;
++            media_part.kind             = ninfer::MessagePartKind::Media;
++            media_part.media.kind       = ninfer::MediaKind::Image;
++            media_part.media.bytes.assign(image_bytes, image_bytes + image_len);
++            media_part.media.media_type = (image_mime != nullptr) ? image_mime : "image/jpeg";
++            media_part.media.source_name = "input";
++            user_message.parts.push_back(std::move(media_part));
++        }
++        {
++            ninfer::MessagePart text_part;
++            text_part.kind = ninfer::MessagePartKind::Text;
++            text_part.text = (user_text_utf8 != nullptr) ? user_text_utf8 : "";
++            user_message.parts.push_back(std::move(text_part));
++        }
++        input.messages.push_back(std::move(user_message));
++
++        ninfer::RequestOptions req;
++        if (request != nullptr) {
++            input.options.enable_thinking = (request->enable_thinking != 0);
++            req.execution.requested_output_tokens = static_cast<std::uint32_t>(
++                request->max_new_tokens > 0 ? request->max_new_tokens : 512);
++
++            // Negative values mean "leave the registered model/mode default in place".
++            if (request->temperature >= 0.0F)       req.execution.sampling.temperature       = request->temperature;
++            if (request->top_k >= 0)                req.execution.sampling.top_k             = request->top_k;
++            if (request->top_p >= 0.0F)             req.execution.sampling.top_p             = request->top_p;
++            if (request->min_p >= 0.0F)             req.execution.sampling.min_p             = request->min_p;
++            if (request->presence_penalty >= 0.0F)  req.execution.sampling.presence_penalty  = request->presence_penalty;
++            if (request->frequency_penalty >= 0.0F) req.execution.sampling.frequency_penalty = request->frequency_penalty;
++            if (request->seed >= 0)                 req.execution.sampling.seed              = static_cast<std::uint64_t>(request->seed);
++        } else {
++            input.options.enable_thinking         = false;
++            req.execution.requested_output_tokens = 512;
++        }
++
++        ninfer::PreparedPrompt prompt = self->engine.prepare(std::move(input));
++
++        BufferSink sink;
++        self->engine.generate(std::move(prompt), std::move(req), &sink);
++
++        const std::size_t room    = static_cast<std::size_t>(out_cap - 1);
++        const std::size_t written = sink.content.size() < room ? sink.content.size() : room;
++        if (written > 0) {
++            std::memcpy(out_buf, sink.content.data(), written);
++        }
++        out_buf[written] = '\0';
++        return static_cast<int32_t>(written);
++    } catch (const std::exception& error) {
++        g_last_error = error.what();
++        return -1;
++    } catch (...) {
++        g_last_error = "unknown error during generation";
++        return -1;
++    }
++}
++
++// Destroys the engine and releases every GPU allocation it owns. Call this before handing
++// the GPU back to a diffusion pipeline.
++NINFER_CAPI_API void ninfer_destroy(void* handle) {
++    delete static_cast<Handle*>(handle);
++}
++
++} // extern "C"
+diff --git a/apps/capi/test_ninfer_dll.py b/apps/capi/test_ninfer_dll.py
+new file mode 100644
+index 00000000..17f1884b
+--- /dev/null
++++ b/apps/capi/test_ninfer_dll.py
+@@ -0,0 +1,169 @@
++"""PoC: load ninfer_capi.dll into a Python process and drive the engine in-process.
++
++This verifies the two things a ComfyUI integration depends on:
++
++  1. ctypes can load and call the C ABI at all.
++  2. ninfer and PyTorch can coexist in ONE process / ONE CUDA context — i.e. we can
++     build a CUDA context with torch first, then load ninfer into the same process,
++     and neither blows up.
++
++Run (from the repo root, after building the ninfer_capi target):
++
++    python apps/capi/test_ninfer_dll.py ^
++        --dll build-windows/apps/ninfer_capi.dll ^
++        --model models/qwen3_8_27b.ninfer
++
++Optional:
++    --mtp 3            enable MTP speculative decoding with 3 draft tokens
++    --thinking         keep the reasoning pass (default: OFF, which is the fast path)
++    --max-context 4096 --max-tokens 128
++
++If step [3/4] or [4/4] fails, read the printed ninfer_last_error() string.
++"""
++
++import argparse
++import ctypes
++import sys
++import time
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--dll", required=True, help="path to ninfer_capi.dll")
++    parser.add_argument("--model", required=True, help="path to the .ninfer artifact")
++    parser.add_argument("--max-context", type=int, default=4096)
++    parser.add_argument("--max-tokens", type=int, default=128)
++    parser.add_argument("--mtp", type=int, default=0,
++                        help="0 = off, else MTP draft tokens (1..5)")
++    parser.add_argument("--thinking", action="store_true",
++                        help="enable the reasoning pass (default: off = fast path)")
++    parser.add_argument("--system", default="You are a senior prompt engineer.",
++                        help="system prompt")
++    parser.add_argument("--prompt",
++                        default="Rewrite this as a rich, detailed image prompt: a cat on a roof.")
++    return parser.parse_args()
++
++
++def bind_signatures(lib: ctypes.CDLL) -> None:
++    """Declare argtypes/restypes so ctypes marshals correctly."""
++    lib.ninfer_create.restype = ctypes.c_void_p
++    lib.ninfer_create.argtypes = [
++        ctypes.c_char_p,  # artifact_path (UTF-8)
++        ctypes.c_int,     # device
++        ctypes.c_int,     # max_context
++        ctypes.c_int,     # speculative_mtp
++        ctypes.c_int,     # kv_tokens (0 = follow max_context)
++    ]
++
++    lib.ninfer_generate.restype = ctypes.c_int
++    lib.ninfer_generate.argtypes = [
++        ctypes.c_void_p,  # handle
++        ctypes.c_char_p,  # system text (UTF-8, may be NULL)
++        ctypes.c_char_p,  # user text (UTF-8)
++        ctypes.c_int,     # max_new_tokens
++        ctypes.c_int,     # enable_thinking
++        ctypes.c_char_p,  # out buffer
++        ctypes.c_int,     # out capacity (bytes, incl. NUL)
++    ]
++
++    lib.ninfer_destroy.restype = None
++    lib.ninfer_destroy.argtypes = [ctypes.c_void_p]
++
++    lib.ninfer_last_error.restype = ctypes.c_char_p
++    lib.ninfer_last_error.argtypes = []
++
++
++def main() -> int:
++    args = parse_args()
++
++    # ------------------------------------------------------------------
++    # [1/4] Bring up torch + its CUDA context FIRST, simulating ComfyUI.
++    #       If ninfer then works, the two share a process cleanly.
++    # ------------------------------------------------------------------
++    print("[1/4] initialising torch CUDA (simulating ComfyUI's existing context)...")
++    try:
++        import torch
++
++        if torch.cuda.is_available():
++            probe = torch.zeros(1024, device="cuda")
++            name = torch.cuda.get_device_name(0)
++            print(f"      torch OK  device={name}  "
++                  f"allocated={torch.cuda.memory_allocated() / 2**20:.1f} MiB")
++            del probe
++        else:
++            print("      torch present but CUDA unavailable (continuing anyway)")
++    except ImportError:
++        print("      torch not installed in this interpreter (continuing anyway)")
++
++    # ------------------------------------------------------------------
++    # [2/4] Load the DLL INTO this process.
++    # ------------------------------------------------------------------
++    print(f"[2/4] loading {args.dll} via ctypes ...")
++    try:
++        lib = ctypes.CDLL(args.dll)
++    except OSError as error:
++        print(f"      FAILED to load: {error}")
++        return 1
++    bind_signatures(lib)
++    print("      loaded")
++
++    # ------------------------------------------------------------------
++    # [3/4] Load the artifact (slow, happens once).
++    # ------------------------------------------------------------------
++    print(f"[3/4] creating engine (max_context={args.max_context}, mtp={args.mtp}) ...")
++    started = time.perf_counter()
++    handle = lib.ninfer_create(args.model.encode("utf-8"), 0,
++                               args.max_context, args.mtp, 0)
++    if not handle:
++        print("      FAILED:", lib.ninfer_last_error().decode("utf-8", "replace"))
++        return 1
++    print(f"      engine ready in {time.perf_counter() - started:.2f}s")
++
++    # ------------------------------------------------------------------
++    # [4/4] Generate.
++    # ------------------------------------------------------------------
++    print("[4/4] generating ...")
++    buffer = ctypes.create_string_buffer(1 << 16)
++    started = time.perf_counter()
++    written = lib.ninfer_generate(
++        handle,
++        args.system.encode("utf-8"),
++        args.prompt.encode("utf-8"),
++        args.max_tokens,
++        1 if args.thinking else 0,
++        buffer,
++        len(buffer),
++    )
++    elapsed = time.perf_counter() - started
++
++    if written < 0:
++        print("      FAILED:", lib.ninfer_last_error().decode("utf-8", "replace"))
++        lib.ninfer_destroy(handle)
++        return 1
++
++    if elapsed > 0:
++        print(f"      {written} bytes in {elapsed:.2f}s ({written / elapsed:.1f} bytes/s)")
++    else:
++        print(f"      {written} bytes")
++    print("      --- output ---")
++    print("      " + buffer.value.decode("utf-8", "replace"))
++
++    # Release every GPU allocation so a diffusion pass can take the card.
++    lib.ninfer_destroy(handle)
++    print("engine destroyed — GPU memory released")
++
++    # Confirm torch is still healthy after ninfer released its memory: this is the
++    # observable proof that the two coexist in one process.
++    if "torch" in sys.modules:
++        import torch
++
++        if torch.cuda.is_available():
++            torch.cuda.empty_cache()
++            print("torch still healthy, "
++                  f"allocated={torch.cuda.memory_allocated() / 2**20:.1f} MiB")
++
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

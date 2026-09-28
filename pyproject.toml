@@ -1,0 +1,23 @@
+[project]
+name = "comfyui-ninfer"
+version = "0.1.0"
+description = "Run a NInfer LLM (Qwen3.8-27B, .ninfer artifacts) inside ComfyUI's own process — no server, no subprocess, optional vision, instant VRAM release."
+license = "MIT"
+requires-python = ">=3.10"
+# Intentionally empty: numpy and Pillow already ship with ComfyUI, and everything else here
+# is stdlib. The engine itself is a downloaded Release asset, not a pip package.
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/YukinoKaorisuna/ComfyUI-NInfer"
+
+[tool.comfy]
+# ComfyUI Registry publisher id == your GitHub username (registry sign-in is GitHub OAuth),
+# so it is derived automatically rather than invented. Not used when publishing via GitHub only.
+PublisherId = "YukinoKaorisuna"
+DisplayName = "NInfer Local LLM"
+Icon = ""
+requires-comfyui = ">=0.3.0"
+
+# Not a pip-installable distribution: this is a ComfyUI node pack, installed by cloning it
+# into custom_nodes/ (or via ComfyUI Manager), so no [build-system] is declared.
