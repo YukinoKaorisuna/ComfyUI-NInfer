@@ -128,7 +128,7 @@ set NINFER_MODEL_DIRS=D:\models
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `model` | 扫到的第一个 | 从 `ComfyUI/models/LLM` 扫描 `.ninfer` |
+| `model` | 上次成功用的那个 | 自动扫描 `ComfyUI/models/LLM`（含插件自带 `models/`）里的 `.ninfer` —— 文件放进去、重启 ComfyUI 就出现，**不用手动输路径** |
 | `system_prompt` | 提示词工程师角色 | 每次保持一致有利于前缀复用 |
 | `user_prompt` | | 你的输入 |
 | `max_context` | 4096 | 显存第一杠杆；16 GB 上 4096 是稳的上限 |
@@ -144,7 +144,10 @@ set NINFER_MODEL_DIRS=D:\models
 | `use_cuda_graph` | true | 最快；取消勾选可解锁更大的 `max_context` |
 | `free_comfy_vram` | true | 创建引擎前卸载 ComfyUI 自己的模型 |
 | `auto_recover` | true | 创建失败时自动重试而不是直接报错（见常见报错） |
-| `model_path_override`、`dll_path` | 空 | 文件不在扫描目录里时用 |
+| `model_path_override`、`dll_path` | 空 | 仅当文件不在扫描目录里才用；**留空**则引擎自动从 `bin/` 解析 |
+
+插件有记忆：一次成功生成后，新拖的节点默认选中该模型；`info` 输出会显示实际加载的引擎
+路径（`engine=... dll_path widget was auto-resolved`）。已保存的工作流仍用自己存的值。
 
 输出 `text` 和 `info`。`info` 会报耗时和引擎的显存占用，第一次跑建议接一个 Show Text 节点。
 

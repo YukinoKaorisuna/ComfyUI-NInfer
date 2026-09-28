@@ -5,6 +5,9 @@ bin/*.txt
 bin/*.zip
 _engine_download.zip
 
+# Runtime memory (last model / engine), written next to the pack
+_state.json
+
 # Staging output from tools/make_release.ps1
 build/
 

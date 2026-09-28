@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 PACK = HERE.parent
 sys.path.insert(0, str(PACK))
 
+import _deps  # noqa: E402  (needs the path above)
 import _paths  # noqa: E402  (needs the path above)
 
 GIB = 1 << 30
@@ -234,6 +235,24 @@ def report_engine() -> tuple[Path | None, set[str]]:
     if len(neighbours) < 5:
         print("                -> re-run: python tools/fetch_engine.py")
 
+    # Counting files is not enough: a real bundle shipped 14 of them and still could not
+    # load, because avcodec-63.dll imports swresample-7.dll and that one was missing. Walk
+    # the import tables instead, so the answer names the file to go and get.
+    gaps = []
+    if sys.platform == "win32":
+        try:
+            gaps = _deps.missing_dependencies(str(engine))
+        except Exception:  # noqa: BLE001 - diagnostics must not raise
+            gaps = []
+        if gaps:
+            print(f"  MISSING     : {', '.join(sorted({name for _, name in gaps}))}")
+            for owner, name in gaps:
+                print(f"                  {name}  <- imported by {owner}")
+            print("                -> copy the missing file(s) next to the engine, or")
+            print("                   re-copy the whole ComfyUI-NInfer folder from the bundle")
+        else:
+            print("  Dependencies: all resolved (transitive import walk)")
+
     arches, method = engine_arches(engine)
     if arches:
         print(f"  Architectures: {', '.join(sorted(arches))}   (via {method})")
@@ -330,6 +349,21 @@ def report_verdict(gpu: dict, engine: Path | None, arches: set[str], models: lis
         if len(neighbours) < 5:
             problems.append("The engine's runtime libraries are missing next to it.")
             steps.append("Re-download:  python tools/fetch_engine.py")
+        elif sys.platform == "win32":
+            # The count looked fine but a transitive import may still be absent. This is
+            # the case that produces "Could not find module ... (or one of its
+            # dependencies)" with no further clue at run time.
+            try:
+                gaps = _deps.missing_dependencies(str(engine))
+            except Exception:  # noqa: BLE001
+                gaps = []
+            if gaps:
+                names = ", ".join(sorted({name for _, name in gaps}))
+                problems.append(f"Runtime libraries missing next to the engine: {names}")
+                steps.append(f"Copy {names} into {engine.parent} (same folder as the "
+                             f"engine), then restart ComfyUI.")
+                steps.append("Or re-copy the whole ComfyUI-NInfer folder from the "
+                             "bundle/release archive - it ships every dependency.")
 
     if not models:
         problems.append("No .ninfer model is visible.")

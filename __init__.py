@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import time
 
+from . import _state
 from ._capi import (
     KV_DTYPES,
     NinferError,
@@ -46,9 +47,11 @@ from ._paths import (
     resolve_model,
 )
 
-#: Compute capabilities the published engine binary actually contains. Verified with
-#: ``cuobjdump --list-elf bin/ninfer_capi.dll`` -> three sm_120a cubins, no PTX.
-PREBUILT_ARCHES = ("sm_120",)
+#: Compute capabilities the engine binary can actually contain. Verified with
+#: ``cuobjdump --list-elf bin/ninfer_capi.dll``. The published binary ships sm_120a only;
+#: locally built engines (e.g. the sm_89 build for RTX 40-series) drop the same name into
+#: bin/, so the arch check must accept it too.
+PREBUILT_ARCHES = ("sm_120", "sm_89")
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a senior prompt engineer for image and video generation models. "
@@ -72,11 +75,16 @@ class NinferLocalLLM:
     @classmethod
     def INPUT_TYPES(cls):
         choices = model_choices() or [_NO_MODEL]
+        # Remember what loaded successfully last time: a fresh node should default to the
+        # model the user actually works with, not whichever artifact sorts first. A saved
+        # workflow keeps its own stored value; this only steers newly created nodes.
+        remembered = _state.last_model()
+        default_model = remembered if remembered in choices else choices[0]
         return {
             "required": {
                 # Populated by scanning ComfyUI/models/LLM and friends. Adding a model
                 # needs a ComfyUI restart for the dropdown to refresh.
-                "model": (choices, {"default": choices[0]}),
+                "model": (choices, {"default": default_model}),
                 "system_prompt": ("STRING", {"multiline": True, "default": DEFAULT_SYSTEM_PROMPT}),
                 "user_prompt": ("STRING", {"multiline": True, "default": DEFAULT_USER_PROMPT}),
                 "max_context": ("INT", {"default": 4096, "min": 2048, "max": 131072, "step": 1024}),
@@ -195,6 +203,10 @@ class NinferLocalLLM:
             raise NinferError(guidance_for(str(error), cfg)) from None
         gen_seconds = time.perf_counter() - gen_started
 
+        # Persist for next time: this model label and the binary that is actually running.
+        # Both surface again as the new-node default and the engine= line in the info text.
+        _state.save(model=model, engine=engine.dll_path)
+
         released = False
         if not keep_loaded:
             release_all()
@@ -212,6 +224,7 @@ class NinferLocalLLM:
         info = (
             f"load {load_seconds:.2f}s | gen {gen_seconds:.2f}s | {len(text)} chars\n"
             f"model={model_path}\n"
+            f"engine={engine.dll_path}  (dll_path widget was {'auto-resolved' if not dll_path.strip() else 'set manually'})\n"
             f"ctx={max_context} | vision={has_vision} | MTP={mtp_draft_tokens} | kv={kv_dtype} | "
             f"graph={'on' if use_cuda_graph else 'off'} | emb_host={'on' if embedding_host else 'off'}\n"
             f"thinking={'on' if enable_thinking else 'off'} | "

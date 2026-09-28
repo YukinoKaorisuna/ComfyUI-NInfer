@@ -30,7 +30,8 @@ import os
 import re
 import threading
 
-from ._paths import build_arch_hint, device_arch, dll_setup_hint, resolve_dll
+from ._deps import missing_dependencies
+from ._paths import build_arch_hint, candidate_dll_paths, device_arch, dll_setup_hint
 
 #: widget value -> NinferCreateOptions::kv_dtype
 KV_DTYPES = {"bf16": 0, "int8": 1, "int4": 2}
@@ -156,6 +157,24 @@ def _library_load_hint(dll_path: str, exc: OSError) -> str:
         pass
 
     missing_deps = len(siblings) <= 1          # only the engine itself is present
+
+    # Windows says "or one of its dependencies" and stops there. Parse the import tables
+    # ourselves so the message names the actual gap: in a real case every visible file was
+    # present and the load still failed because avcodec-63.dll needs swresample-7.dll,
+    # which had not been shipped.
+    gaps = ""
+    try:
+        found = missing_dependencies(dll_path)
+    except Exception:  # noqa: BLE001 - a diagnostic must never mask the real error
+        found = []
+    if found:
+        listed = "\n".join(f"       {name}   (imported by {owner})"
+                           for owner, name in found)
+        gaps = (f"     Missing / 缺失: {', '.join(sorted({n for _, n in found}))}\n"
+                f"{listed}\n"
+                "     -> copy the file(s) above next to the engine, or re-copy the whole\n"
+                "        ComfyUI-NInfer folder from your bundle/release archive.\n")
+
     return (
         f"Could not load the engine binary / 无法加载引擎二进制:\n  {dll_path}\n"
         f"  {type(exc).__name__}: {exc}\n"
@@ -165,8 +184,9 @@ def _library_load_hint(dll_path: str, exc: OSError) -> str:
         "     引擎的运行时库不在同一个目录里。\n"
         f"     Files found there / 该目录下的库文件: "
         f"{', '.join(siblings) if siblings else '(none)'}\n"
+        + gaps
         + ("     -> re-run: python tools/fetch_engine.py\n"
-           if missing_deps else "")
+           if missing_deps and not gaps else "")
         + "  2. Visual C++ redistributable missing -> install the latest VC++ x64 runtime.\n"
           "     缺少 VC++ 运行库。\n"
         "  3. Architecture mismatch (32/64-bit, or an engine built for another platform).\n"
@@ -181,10 +201,13 @@ def _library_load_hint(dll_path: str, exc: OSError) -> str:
 class Engine:
     """An owned engine. Cheap to hold, expensive to create."""
 
-    def __init__(self, lib: ctypes.CDLL, handle: int, key: tuple):
+    def __init__(self, lib: ctypes.CDLL, handle: int, key: tuple, dll_path: str = ""):
         self._lib = lib
         self._handle = handle
         self.key = key
+        #: Absolute path of the binary this engine was loaded from. Shown in the node's
+        #: info output so ``dll_path`` left empty is visibly resolved to the right file.
+        self.dll_path = dll_path
 
     def has_vision(self) -> bool:
         if not self._handle:
@@ -402,11 +425,38 @@ def _key_for(cfg: dict) -> tuple:
 
 
 def _create(cfg: dict, key: tuple) -> Engine:
-    dll_path = resolve_dll(cfg.get("dll_path"))
-    if dll_path is None:
+    explicit = (cfg.get("dll_path") or "").strip()
+
+    # Try to actually *load* each candidate rather than trusting that the first existing
+    # file is usable. A workflow that was saved with a dll_path pointing at a folder that
+    # has since moved (or at a copy missing one runtime DLL) used to fail outright even
+    # though a perfectly good engine sat in bin/ — existence is not loadability.
+    candidates: list[str] = []
+    for path in candidate_dll_paths(explicit or None):
+        if not path or not os.path.isfile(path):
+            continue
+        absolute = os.path.abspath(path)
+        if absolute not in candidates:
+            candidates.append(absolute)
+    if not candidates:
         raise NinferError(dll_setup_hint())
 
-    lib = _load_library(dll_path)
+    load_error: str | None = None
+    for dll_path in candidates:
+        try:
+            lib = _load_library(dll_path)
+        except NinferError as exc:
+            load_error = str(exc)
+            continue
+        if load_error is not None:
+            # The user's explicit path was unusable and a later candidate worked. Say so
+            # once in the log: silently loading a different binary would be worse.
+            print(f"[NInfer] dll_path {explicit!r} could not be loaded; "
+                  f"using {dll_path} instead. Clear the dll_path widget to silence this.")
+        break
+    else:
+        raise NinferError(load_error or dll_setup_hint())
+
     options = CreateOptions(
         artifact_path=cfg["model_path"].encode("utf-8"),
         device=int(cfg.get("device", 0)),
@@ -422,7 +472,7 @@ def _create(cfg: dict, key: tuple) -> Engine:
     handle = lib.ninfer_create(ctypes.byref(options))
     if not handle:
         raise NinferError(lib.ninfer_last_error().decode("utf-8", "replace"))
-    return Engine(lib, handle, key)
+    return Engine(lib, handle, key, dll_path=dll_path)
 
 
 def _replace_with(candidate: dict) -> Engine:

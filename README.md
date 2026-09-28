@@ -135,7 +135,7 @@ node.
 
 | Widget | Default | Description |
 |---|---|---|
-| `model` | first found | `.ninfer` files scanned from `ComfyUI/models/LLM` |
+| `model` | last one that worked | `.ninfer` files scanned automatically from `ComfyUI/models/LLM` (and the pack's own `models/` folder) — drop a file in, restart ComfyUI, it appears; no path to type |
 | `system_prompt` | prompt-engineer role | keep it identical between runs to help prefix reuse |
 | `user_prompt` | | your input |
 | `max_context` | 4096 | the main VRAM lever; 4096 is the safe ceiling on 16 GB |
@@ -151,7 +151,11 @@ node.
 | `use_cuda_graph` | true | fastest; unchecking it unlocks a larger `max_context` |
 | `free_comfy_vram` | true | unloads ComfyUI's own models just before the engine is created |
 | `auto_recover` | true | retries a failed engine creation instead of failing (see Troubleshooting) |
-| `model_path_override`, `dll_path` | empty | for files outside the scanned folders |
+| `model_path_override`, `dll_path` | empty | only for files outside the scanned folders; **leave empty** and the engine binary is resolved from `bin/` automatically |
+
+The pack remembers what worked: after a successful run, newly created nodes default to that
+model, and the `info` output shows the engine binary that was auto-resolved
+(`engine=... dll_path widget was auto-resolved`). Saved workflows keep their own stored values.
 
 Outputs `text` and `info`. `info` reports timings and the engine's VRAM footprint — wire it into
 a Show Text node the first time you run this.
