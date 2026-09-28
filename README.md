@@ -24,7 +24,7 @@ The engine binary has to match your GPU's compute capability. There are two preb
 | GPU | Compute | Prebuilt engine | Other GPUs |
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [official build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (`sm_120a`) | — |
-| RTX 40-series (4050 Laptop – 4090) | `sm_89` | ✅ [community build](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1), all 40-series cards | L4 / L40S are the same `sm_89` — should work, untested |
+| RTX 40-series (4050 Laptop – 4090) | `sm_89` | ✅ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm89` package), all 40-series cards | L4 / L40S are the same `sm_89` — should work, untested |
 | RTX 3000-series, A40, A6000 | `sm_86` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
 | A100 / H100 | `sm_80` / `sm_90` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
 | AMD, Intel, Apple | — | ❌ | not supported (CUDA only) |
@@ -50,10 +50,10 @@ git clone https://github.com/YukinoKaorisuna/ComfyUI-NInfer ComfyUI\custom_nodes
 python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-NInfer\tools\fetch_engine.py
 ```
 
-`fetch_engine.py` detects your GPU, downloads the matching engine (~250 MB) into `bin/`, and
-**skips itself when an engine is already installed** (`--force` re-downloads). It currently only
-looks for the RTX 50-series package — **RTX 40-series users, see the next section**. Restart
-ComfyUI afterwards. To check everything before running:
+`fetch_engine.py` detects your GPU and downloads the matching engine archive (~230–300 MB) into
+`bin/` — the Releases page carries one package per GPU series (50-series `sm120a`, 40-series
+`sm89`), and the script picks the right one; **skips itself when an engine is already installed**
+(`--force` re-downloads). Restart ComfyUI afterwards. To check everything before running:
 
 ```
 python tools/doctor.py
@@ -65,8 +65,9 @@ everything into `ComfyUI-NInfer/bin/`.
 
 ### RTX 40-series (sm_89)
 
-40-series uses [this community build](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1):
-download `ninfer_capi-win-sm89-v1.zip` (~291 MB), then—
+40-series uses the community build: grab `ninfer-engine-win-x64-sm89-0.1.0.zip` (~291 MB) from the
+[Releases page](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) — or just run
+`python tools/fetch_engine.py` above, which picks this package automatically. Manual install:
 
 1. **Unzip ALL 21 DLLs into `ComfyUI-NInfer/bin/`** — not just the engine DLL. The archive holds
    the engine `ninfer_capi.dll` + 10 runtime dependencies (FFmpeg 7.x / libcurl etc.) + 10 VC++
@@ -78,8 +79,9 @@ download `ninfer_capi-win-sm89-v1.zip` (~291 MB), then—
 3. Restart ComfyUI. The startup banner must read `[NInfer] Ready - NVIDIA GeForce RTX 4xxx … (sm_89)`.
 
 > [!NOTE]
-> `fetch_engine.py` does not cover 40-series yet. The zip above carries every dependency with it —
-> unzip and run, no CUDA Toolkit, no extra downloads.
+> The zip carries every dependency with it — unzip and run, no CUDA Toolkit, no extra downloads.
+> 50-series users should take the `sm120a` package from the same page instead; the two engines
+> each only run on their own architecture.
 
 ```
 ComfyUI-NInfer/

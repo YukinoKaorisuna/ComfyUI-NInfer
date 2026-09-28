@@ -23,7 +23,7 @@
 | 显卡 | Compute | 预编译引擎 | 其他显卡 |
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [官方构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm_120a`） | — |
-| RTX 40 系（4050 Laptop ~ 4090） | `sm_89` | ✅ [社区构建](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1)，40 系全系通用 | L4 / L40S 同为 `sm_89`，理论可用、未验证 |
+| RTX 40 系（4050 Laptop ~ 4090） | `sm_89` | ✅ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm89` 包），40 系全系通用 | L4 / L40S 同为 `sm_89`，理论可用、未验证 |
 | RTX 30 系、A40、A6000 | `sm_86` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
 | A100 / H100 | `sm_80` / `sm_90` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
 | AMD、Intel、Apple | — | ❌ | 不支持（引擎只支持 CUDA） |
@@ -49,9 +49,9 @@ git clone https://github.com/YukinoKaorisuna/ComfyUI-NInfer ComfyUI\custom_nodes
 python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-NInfer\tools\fetch_engine.py
 ```
 
-`fetch_engine.py` 会识别你的显卡，把对应引擎（约 250 MB）下载到 `bin/`；**检测到已安装就自动
-跳过**（`--force` 强制重下）。目前它只找 RTX 50 系的官方包 —— **RTX 40 系用户请看下一节**。
-之后**重启 ComfyUI**。想先确认环境：
+`fetch_engine.py` 会识别你的显卡，把对应的引擎包（约 230~300 MB）下载到 `bin/`——Releases 里
+每个显卡系列一个独立的包（50 系 `sm120a`、40 系 `sm89`），脚本自动挑对的那一个；**检测到已安装
+就自动跳过**（`--force` 强制重下）。之后**重启 ComfyUI**。想先确认环境：
 
 ```
 python tools/doctor.py
@@ -63,8 +63,9 @@ python tools/doctor.py
 
 ### RTX 40 系（sm_89）
 
-40 系用的是[引擎仓库的社区构建](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1)：
-下载 `ninfer_capi-win-sm89-v1.zip`（约 291 MB），然后——
+40 系用的是社区构建：在 [Releases](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)
+里下载 `ninfer-engine-win-x64-sm89-0.1.0.zip`（约 291 MB）——或者直接跑上面的
+`python tools/fetch_engine.py`，它会自动选中这个包。手动安装时——
 
 1. **把压缩包里的全部 21 个 DLL 解压到 `ComfyUI-NInfer/bin/`**，不是只放引擎那一个文件。包内是
    引擎 `ninfer_capi.dll` + 10 个运行时依赖（FFmpeg 7.x / libcurl 等）+ 10 个 VC++ 运行时，
@@ -74,8 +75,8 @@ python tools/doctor.py
 3. 重启 ComfyUI。启动日志横幅应显示 `[NInfer] Ready - NVIDIA GeForce RTX 4xxx … (sm_89)`。
 
 > [!NOTE]
-> `fetch_engine.py` 暂不覆盖 40 系。上面的 zip 自带全部依赖：解压即用，不需要 CUDA Toolkit，
-> 也不需要再单独下载任何 DLL。
+> 这个 zip 自带全部依赖：解压即用，不需要 CUDA Toolkit，也不需要再单独下载任何 DLL。
+> 50 系用户请用同页的 `sm120a` 包，别混用 —— 两个引擎只各认自己的架构。
 
 ```
 ComfyUI-NInfer/

@@ -169,13 +169,16 @@ def extract(archive: Path) -> list[str]:
             if not base:
                 continue
             lowered = base.lower()
+            rel = info.filename.replace("\\", "/").lower()
             # Keep code plus notices; drop sources, symbols and documentation.
             keep = (lowered.endswith((".dll", ".so", ".dylib"))
                     or lowered.startswith("license")
-                    or lowered.startswith("notice"))
+                    or lowered.startswith("notice")
+                    or "third_party/" in rel)
             if not keep:
                 continue
-            target = BIN_DIR / base
+            target = BIN_DIR / (rel if "third_party/" in rel else base)
+            target.parent.mkdir(parents=True, exist_ok=True)
             with bundle.open(info) as source, open(target, "wb") as sink:
                 sink.write(source.read())
             written.append(base)
