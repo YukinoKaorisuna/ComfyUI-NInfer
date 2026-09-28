@@ -12,19 +12,18 @@
 | | |
 |---|---|
 | 系统 | Windows x64 |
-| 显卡 | NVIDIA **RTX 50 系**（`sm_120`）才能用预编译引擎 |
+| 显卡 | NVIDIA **RTX 50 系**（`sm_120`）或 **RTX 40 系**（`sm_89`，社区构建，见下） |
 | 显存 | 约 15 GiB 的制品**最低 16 GB**；官方制品需要 24 GB 以上 |
 | ComfyUI | 近期版本均可（开发环境 0.36） |
 | Python 包 | **无** —— numpy 和 Pillow 随 ComfyUI 自带 |
 | 磁盘 | 引擎约 250 MB + 模型制品 16~23 GB |
 
-引擎二进制必须和显卡的 compute capability 匹配。已发布的构建里只有 `sm_120a` 代码，因此只能在
-RTX 50 系上运行：
+引擎二进制必须和显卡的 compute capability 匹配。现有两份预编译构建：
 
 | 显卡 | Compute | 预编译引擎 | 其他显卡 |
 |---|---|---|---|
-| RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ 可用 | — |
-| RTX 40 系、L4、L40S | `sm_89` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
+| RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [官方构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm_120a`） | — |
+| RTX 40 系（4050 Laptop ~ 4090） | `sm_89` | ✅ [社区构建](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1)，40 系全系通用 | L4 / L40S 同为 `sm_89`，理论可用、未验证 |
 | RTX 30 系、A40、A6000 | `sm_86` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
 | A100 / H100 | `sm_80` / `sm_90` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
 | AMD、Intel、Apple | — | ❌ | 不支持（引擎只支持 CUDA） |
@@ -51,7 +50,8 @@ python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-NInfer\tools\fetch_engine
 ```
 
 `fetch_engine.py` 会识别你的显卡，把对应引擎（约 250 MB）下载到 `bin/`；**检测到已安装就自动
-跳过**（`--force` 强制重下）。之后**重启 ComfyUI**。想先确认环境：
+跳过**（`--force` 强制重下）。目前它只找 RTX 50 系的官方包 —— **RTX 40 系用户请看下一节**。
+之后**重启 ComfyUI**。想先确认环境：
 
 ```
 python tools/doctor.py
@@ -60,6 +60,22 @@ python tools/doctor.py
 也可以手动下载：到 [Releases](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) 页面，
 取与显卡匹配的 `ninfer-engine-win-x64-<架构>-<版本>.zip`（例如 `sm120a`），把压缩包里的全部文件
 解压到 `ComfyUI-NInfer/bin/`。
+
+### RTX 40 系（sm_89）
+
+40 系用的是[引擎仓库的社区构建](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1)：
+下载 `ninfer_capi-win-sm89-v1.zip`（约 291 MB），然后——
+
+1. **把压缩包里的全部 21 个 DLL 解压到 `ComfyUI-NInfer/bin/`**，不是只放引擎那一个文件。包内是
+   引擎 `ninfer_capi.dll` + 10 个运行时依赖（FFmpeg 7.x / libcurl 等）+ 10 个 VC++ 运行时，
+   **缺任何一个引擎都无法加载**（报缺依赖 / DLL not found）。
+2. 节点的 `dll_path` 控件**保持留空** —— 引擎自动从 `bin/` 解析。之前填过旧路径的记得清空：
+   指向不存在的文件时会被静默跳过，指向旧文件时会加载旧引擎。
+3. 重启 ComfyUI。启动日志横幅应显示 `[NInfer] Ready - NVIDIA GeForce RTX 4xxx … (sm_89)`。
+
+> [!NOTE]
+> `fetch_engine.py` 暂不覆盖 40 系。上面的 zip 自带全部依赖：解压即用，不需要 CUDA Toolkit，
+> 也不需要再单独下载任何 DLL。
 
 ```
 ComfyUI-NInfer/
@@ -198,6 +214,7 @@ set NINFER_MODEL_DIRS=D:\models
 | 报错 | 含义 | 怎么办 |
 |---|---|---|
 | `no kernel image is available for execution on the device` | 引擎里没有你这张卡的代码 | [按你的架构编译](docs/COMPATIBILITY.md#other-gpus) |
+| `Qwen3.6 family runtime requires compute capability 12.0` | 加载到的还是旧引擎 —— 40 系新构建已放宽为 `sm_89+` | 用新 zip 里的 `ninfer_capi.dll` 覆盖 `bin/` 的那份，并清空 `dll_path`，重启 |
 | `runtime reservation requires X, but only Y bytes are available` | `Y` 是权重加载后的实时空闲显存；`0` 就是一字节不剩 | `free_comfy_vram ✓`、降 `max_context`、`kv_dtype int8`、`vision ✗` |
 | `model weights require X … but only Y bytes are free` | 权重本身就放不下 | 腾显存或换更小的制品 |
 | `CUDA Graph preparation consumed X, exceeding the planned allowance of Y` | graph 预算对这个配置算小了 | `use_cuda_graph ✗`（开了 `auto_recover ✓` 会自动重试） |

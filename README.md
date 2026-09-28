@@ -13,19 +13,18 @@ It loads once and stays resident, so every call after the first costs 0 s.
 | | |
 |---|---|
 | OS | Windows x64 |
-| GPU | NVIDIA **RTX 50-series** (`sm_120`) for the prebuilt engine |
+| GPU | NVIDIA **RTX 50-series** (`sm_120`), or **RTX 40-series** (`sm_89`, community build, see below) |
 | VRAM | **16 GB minimum** for a ~15 GiB artifact; the official artifacts want 24 GB+ |
 | ComfyUI | any recent version (developed on 0.36) |
 | Python packages | **none** — numpy and Pillow already ship with ComfyUI |
 | Disk | ~250 MB for the engine + 16–23 GB for a model artifact |
 
-The engine binary has to match your GPU's compute capability. The published build contains
-`sm_120a` code only, so it runs exclusively on RTX 50-series:
+The engine binary has to match your GPU's compute capability. There are two prebuilt builds:
 
 | GPU | Compute | Prebuilt engine | Other GPUs |
 |---|---|---|---|
-| RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ yes | — |
-| RTX 4000-series, L4, L40S | `sm_89` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
+| RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [official build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (`sm_120a`) | — |
+| RTX 40-series (4050 Laptop – 4090) | `sm_89` | ✅ [community build](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1), all 40-series cards | L4 / L40S are the same `sm_89` — should work, untested |
 | RTX 3000-series, A40, A6000 | `sm_86` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
 | A100 / H100 | `sm_80` / `sm_90` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
 | AMD, Intel, Apple | — | ❌ | not supported (CUDA only) |
@@ -52,8 +51,9 @@ python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-NInfer\tools\fetch_engine
 ```
 
 `fetch_engine.py` detects your GPU, downloads the matching engine (~250 MB) into `bin/`, and
-**skips itself when an engine is already installed** (`--force` re-downloads). Restart ComfyUI
-afterwards. To check everything before running:
+**skips itself when an engine is already installed** (`--force` re-downloads). It currently only
+looks for the RTX 50-series package — **RTX 40-series users, see the next section**. Restart
+ComfyUI afterwards. To check everything before running:
 
 ```
 python tools/doctor.py
@@ -62,6 +62,24 @@ python tools/doctor.py
 Manual download instead: take the archive matching your GPU (e.g. `ninfer-engine-win-x64-sm120a-<version>.zip`)
 from the [Releases page](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) and unzip
 everything into `ComfyUI-NInfer/bin/`.
+
+### RTX 40-series (sm_89)
+
+40-series uses [this community build](https://github.com/YukinoKaorisuna/ninfer-5070ti/releases/tag/qwen3.5-9b-sm89-v1):
+download `ninfer_capi-win-sm89-v1.zip` (~291 MB), then—
+
+1. **Unzip ALL 21 DLLs into `ComfyUI-NInfer/bin/`** — not just the engine DLL. The archive holds
+   the engine `ninfer_capi.dll` + 10 runtime dependencies (FFmpeg 7.x / libcurl etc.) + 10 VC++
+   runtimes, and **the engine will not load with any of them missing** (missing-dependency /
+   DLL-not-found error).
+2. Keep the node's `dll_path` widget **empty** — the engine in `bin/` is resolved automatically.
+   If you filled in an old path before, clear it: a non-existent path is silently skipped, and an
+   existing one loads the old engine.
+3. Restart ComfyUI. The startup banner must read `[NInfer] Ready - NVIDIA GeForce RTX 4xxx … (sm_89)`.
+
+> [!NOTE]
+> `fetch_engine.py` does not cover 40-series yet. The zip above carries every dependency with it —
+> unzip and run, no CUDA Toolkit, no extra downloads.
 
 ```
 ComfyUI-NInfer/
@@ -210,6 +228,7 @@ you generate anything, so the fit is decided by a few hundred MiB. Measured on a
 | Message | Meaning | Fix |
 |---|---|---|
 | `no kernel image is available for execution on the device` | the engine has no code for your GPU | [build for your architecture](docs/COMPATIBILITY.md#other-gpus) |
+| `Qwen3.6 family runtime requires compute capability 12.0` | an old engine binary is being loaded — the 40-series build relaxed the gate to `sm_89+` | overwrite `bin/ninfer_capi.dll` with the one from the new zip, clear `dll_path`, restart |
 | `runtime reservation requires X, but only Y bytes are available` | `Y` is the live free VRAM after the weights loaded; `0` means the card is full | `free_comfy_vram ✓`, lower `max_context`, `kv_dtype int8`, `vision ✗` |
 | `model weights require X … but only Y bytes are free` | the weights alone do not fit | free VRAM or use a smaller artifact |
 | `CUDA Graph preparation consumed X, exceeding the planned allowance of Y` | the graph budget estimate is too small for this configuration | `use_cuda_graph ✗` (automatic with `auto_recover ✓`) |
