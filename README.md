@@ -234,6 +234,26 @@ RTX 5070 Ti, 16 GB, ComfyUI running, `max_context 4096`:
 The Python wrapper adds ~8 µs per execution — under 0.002 % of a generation — and the native path
 is unchanged, so decode speed is identical to running the engine standalone.
 
+### Measured against a llama.cpp node
+
+Same machine, same 27B-class model, `max_context 4096`. Both engines warm — no cleanup node in
+front of the LLM — with 200–250 characters of output:
+
+| Task | This pack | `ComfyUI-LLM-text-processor` (llama.cpp, Qwen3.8-27B IQ4_XS, 14.63 GiB) |
+|---|---|---|
+| Translate a prompt (≈230 chars out) | **1.37 s** | 13.56 s |
+| Expand a prompt (≈200 chars out) | **3.56 s** | 16.80 s |
+| First run of a session (cold, 15 GB read) | 21.24 s | 32.55 s |
+
+**4–10× faster** on repeat runs. Most of the gap is the 15 GB reload: the engine stays resident
+here, while the llama.cpp path re-reads the model unless its own cache survives the run.
+
+> [!WARNING]
+> **Do not put a cleanup node in front of the LLM.** A workflow containing `NInfer Free VRAM`
+> (or any VRAM-cleanup node) *before* the LLM node destroys the resident engine and forces a full
+> 15 GB reload every single run — measured at **15–21 s instead of 1.4–3.6 s**. Put it **after**
+> the LLM node, or leave it out and keep `keep_loaded` on.
+
 ### Versus the usual alternatives
 
 | | This pack (in-process DLL) | Local HTTP server (Ollama, llama-server) | Spawn-per-run nodes |
