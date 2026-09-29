@@ -25,13 +25,20 @@ up front:
 | Python packages | **none** — numpy and Pillow already ship with ComfyUI |
 | Disk | ~250 MB for the engine + 16–23 GB for a model artifact |
 
-The engine binary has to match your GPU's compute capability. There are two prebuilt builds:
+The engine binary has to match your GPU's compute capability. There are three prebuilt builds:
 
 | GPU | Compute | Prebuilt engine | Other GPUs |
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [official build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (`sm_120a`) | — |
 | RTX 40-series (4050 Laptop – 4090) | `sm_89` | ✅ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm89` package), all 40-series cards | L4 / L40S are the same `sm_89` — should work, untested |
-| RTX 3000-series, A40, A6000 | `sm_86` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
+| RTX 3000-series (3060 – 3090 Ti), A40 | `sm_86` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm86` package) — **not verified on real hardware** | — |
+
+> [!NOTE]
+> The `sm86` package was cross-compiled on a Blackwell machine (no 30-series card was available):
+> Ampere has no FP8 tensor cores, so the FP8 A8 / NVFP4 / TMA kernel families are compiled out and
+> the engine falls back to the A16 dequantising and W8/Q4-Q6 routes. Confirmed here: the fatbin
+> carries native sm_86 cubins and the engine loads the artifact and allocates every workspace —
+> generation itself was **not** exercised on 30-series hardware.
 | A100 / H100 | `sm_80` / `sm_90` | ❌ | [build it](docs/COMPATIBILITY.md#other-gpus) |
 | AMD, Intel, Apple | — | ❌ | not supported (CUDA only) |
 

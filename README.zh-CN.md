@@ -22,13 +22,18 @@
 | Python 包 | **无** —— numpy 和 Pillow 随 ComfyUI 自带 |
 | 磁盘 | 引擎约 250 MB + 模型制品 16~23 GB |
 
-引擎二进制必须和显卡的 compute capability 匹配。现有两份预编译构建：
+引擎二进制必须和显卡的 compute capability 匹配。现有三份预编译构建：
 
 | 显卡 | Compute | 预编译引擎 | 其他显卡 |
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [官方构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm_120a`） | — |
 | RTX 40 系（4050 Laptop ~ 4090） | `sm_89` | ✅ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm89` 包），40 系全系通用 | L4 / L40S 同为 `sm_89`，理论可用、未验证 |
-| RTX 30 系、A40、A6000 | `sm_86` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
+| RTX 30 系（3060 ~ 3090 Ti）、A40 | `sm_86` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm86` 包）—— **未在实机验证** | — |
+
+> [!NOTE]
+> `sm86` 包是在 Blackwell 机器上交叉编译的（构建时没有 30 系卡可用）：Ampere 没有 FP8 tensor core，
+> 所以 FP8 A8 / NVFP4 / TMA 三族 kernel 被编译期排除，改走 A16 反量化与 W8/Q4-Q6 路径。
+> 已确认 fatbin 内含原生 sm_86 cubin、引擎能完成模型加载与全部工作区分配；**未在 30 系实机跑过生成**。
 | A100 / H100 | `sm_80` / `sm_90` | ❌ | [自行编译](docs/COMPATIBILITY.md#other-gpus) |
 | AMD、Intel、Apple | — | ❌ | 不支持（引擎只支持 CUDA） |
 
