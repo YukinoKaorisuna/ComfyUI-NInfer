@@ -96,6 +96,20 @@ ComfyUI-NInfer/
 > 有两个不同代的制品**同名，都叫 `qwen3_8_27b.ninfer`**，但**不是同一个文件**（15.33 GiB 与
 > 19.03 GiB）。按自己的显存下对的那个；两个都留就分开放。
 
+### 8 GB 卡（唯一可用档）
+
+| 文件 | 体积 | 仓库 |
+|---|---|---|
+| `qwen3_8_9b.ninfer` | 6.07 GiB | [YukinoKaorisuna/Qwen3.8-9B-ninfer-8gb](https://huggingface.co/YukinoKaorisuna/Qwen3.8-9B-ninfer-8gb) |
+| `qwen3_8_9b_uncensored.ninfer` | 6.07 GiB | [YukinoKaorisuna/Qwen3.8-9B-Uncensored-ninfer-8gb](https://huggingface.co/YukinoKaorisuna/Qwen3.8-9B-Uncensored-ninfer-8gb) |
+
+**这是 8 GB 显卡目前唯一能用的 .ninfer 制品** —— 其余已发布制品都是 27B 级（15.33 / 19.03 GiB），要 16 GB 起，
+8 GB 卡放不下。实测（RTX 5070 Ti，`max_context` 2048）：显存 **4.54 GiB**、decode **114 tok/s**，
+放进 `ComfyUI/models/LLM/` 即可被节点扫描到。9B 显存余量够，不用像 27B 那样靠 `NInfer Free VRAM` 分时复用。
+
+来源：Qwen3.8-9B 蒸馏版（[empero-ai/Qwen3.8-9B-Distill](https://huggingface.co/empero-ai/Qwen3.8-9B-Distill)，
+沿用 Qwen3.5-9B 架构），破限版取自 [nurdich/…-uncensored-heretic](https://huggingface.co/nurdich/Qwen3.8-9B-Distill-uncensored-heretic)。
+
 ### 16 GB 卡（本文档针对这个）
 
 | 文件 | 体积 | 仓库 |

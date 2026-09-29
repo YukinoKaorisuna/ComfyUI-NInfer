@@ -105,6 +105,22 @@ different engine.
 > **not the same file** (15.33 GiB vs 19.03 GiB). Take the one matching your VRAM; keep them in
 > separate folders if you want both.
 
+### 8 GB cards (the only artifact that fits)
+
+| File | Size | Repository |
+|---|---|---|
+| `qwen3_8_9b.ninfer` | 6.07 GiB | [YukinoKaorisuna/Qwen3.8-9B-ninfer-8gb](https://huggingface.co/YukinoKaorisuna/Qwen3.8-9B-ninfer-8gb) |
+| `qwen3_8_9b_uncensored.ninfer` | 6.07 GiB | [YukinoKaorisuna/Qwen3.8-9B-Uncensored-ninfer-8gb](https://huggingface.co/YukinoKaorisuna/Qwen3.8-9B-Uncensored-ninfer-8gb) |
+
+**This is the only `.ninfer` artifact that fits an 8 GB card today** — every other published artifact is
+27B-class (15.33 / 19.03 GiB) and needs 16 GB or more. Measured on an RTX 5070 Ti at `max_context` 2048:
+**4.54 GiB VRAM**, **114 tok/s** decode. Drop it into `ComfyUI/models/LLM/` and the node picks it up.
+Unlike the 27B builds you do not need `NInfer Free VRAM` time-slicing to keep a diffusion model around.
+
+Provenance: Qwen3.8-9B distill ([empero-ai/Qwen3.8-9B-Distill](https://huggingface.co/empero-ai/Qwen3.8-9B-Distill),
+Qwen3.5-9B architecture); the abliterated variant comes from
+[nurdich/…-uncensored-heretic](https://huggingface.co/nurdich/Qwen3.8-9B-Distill-uncensored-heretic).
+
 ### 16 GB cards (what this README targets)
 
 | File | Size | Repository |
