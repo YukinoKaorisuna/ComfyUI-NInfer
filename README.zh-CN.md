@@ -22,13 +22,14 @@
 | Python 包 | **无** —— numpy 和 Pillow 随 ComfyUI 自带 |
 | 磁盘 | 引擎约 250 MB + 模型制品 16~23 GB |
 
-引擎二进制必须和显卡的 compute capability 匹配。现有三份预编译构建：
+引擎二进制必须和显卡的 compute capability 匹配。现有四份预编译构建：
 
 | 显卡 | Compute | 预编译引擎 | 其他显卡 |
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [官方构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm_120a`） | — |
 | RTX 40 系（4050 Laptop ~ 4090） | `sm_89` | ✅ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm89` 包），40 系全系通用 | L4 / L40S 同为 `sm_89`，理论可用、未验证 |
 | RTX 30 系（3060 ~ 3090 Ti）、A40 | `sm_86` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm86` 包）—— **未在实机验证** | — |
+| RTX 20 系（2060 ~ 2080 Ti） | `sm_75` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm75` 包）—— **未在实机验证**，源自[社区 Turing 移植](https://github.com/mr-september/ninfer-2080ti-22g) | GTX 10 系及更老不支持 |
 
 > [!NOTE]
 > `sm86` 包是在 Blackwell 机器上交叉编译的（构建时没有 30 系卡可用）：Ampere 没有 FP8 tensor core，

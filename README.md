@@ -25,13 +25,14 @@ up front:
 | Python packages | **none** — numpy and Pillow already ship with ComfyUI |
 | Disk | ~250 MB for the engine + 16–23 GB for a model artifact |
 
-The engine binary has to match your GPU's compute capability. There are three prebuilt builds:
+The engine binary has to match your GPU's compute capability. There are four prebuilt builds:
 
 | GPU | Compute | Prebuilt engine | Other GPUs |
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [official build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (`sm_120a`) | — |
 | RTX 40-series (4050 Laptop – 4090) | `sm_89` | ✅ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm89` package), all 40-series cards | L4 / L40S are the same `sm_89` — should work, untested |
 | RTX 3000-series (3060 – 3090 Ti), A40 | `sm_86` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm86` package) — **not verified on real hardware** | — |
+| RTX 2000-series (2060 – 2080 Ti) | `sm_75` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm75` package) — **not verified on real hardware**, based on the [community Turing port](https://github.com/mr-september/ninfer-2080ti-22g) | GTX 10-series and older unsupported |
 
 > [!NOTE]
 > The `sm86` package was cross-compiled on a Blackwell machine (no 30-series card was available):
