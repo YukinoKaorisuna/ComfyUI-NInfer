@@ -2,8 +2,12 @@
 
 简体中文 | **[English](README.md)**
 
-把 [NInfer](https://github.com/Neroued/ninfer) 大模型跑在 ComfyUI **自己的进程里**。不起服务、不开子进程、
-不用 Ollama —— 引擎是一个原生库，通过 ctypes 直接加载进 ComfyUI。只加载一次并常驻，之后每次调用开销 0 秒。
+把 [NInfer](https://github.com/Neroued/ninfer) 大模型跑进 ComfyUI **自己的进程**。两个硬优势：
+
+- **比同尺寸模型快 4~7 倍** —— 与本地 llama.cpp 跑 27B 级模型的逐项实测：扩写提示词 **5.6×**、
+  翻译 **4.0×**、4 镜头分镜 **7.0×**（原始数据见下文实测对比），decode 约 70 tok/s。
+- **不需要装任何 LLM 服务** —— 不装 Ollama / llama-server，不起 HTTP 服务，不开子进程，零 pip 依赖。
+  引擎是原生 DLL，通过 ctypes 直接加载进 ComfyUI：只加载一次并常驻，之后每次调用开销 0 秒。
 
 ![两个节点](docs/images/nodes.png)
 

@@ -2,9 +2,15 @@
 
 English | **[简体中文](README.zh-CN.md)**
 
-Run [NInfer](https://github.com/Neroued/ninfer) LLMs inside ComfyUI's own process. No server, no
-subprocess, no Ollama — the engine is a native library loaded straight into ComfyUI via ctypes.
-It loads once and stays resident, so every call after the first costs 0 s.
+Run [NInfer](https://github.com/Neroued/ninfer) LLMs inside ComfyUI's own process. Two advantages,
+up front:
+
+- **4–7× faster than the same-size model on llama.cpp** — measured head-to-head on a 27B-class model:
+  prompt expansion **5.6×**, translation **4.0×**, a 4-shot storyboard **7.0×** (raw numbers below),
+  at ≈70 tok/s decode.
+- **No LLM server to install** — no Ollama, no llama-server, no HTTP service, no subprocess, zero pip
+  packages. The engine is a native DLL loaded straight into ComfyUI via ctypes: it loads once, stays
+  resident, and every call after the first costs 0 s.
 
 ![The two nodes](docs/images/nodes.png)
 
