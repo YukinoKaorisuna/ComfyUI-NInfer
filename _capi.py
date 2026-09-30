@@ -74,6 +74,21 @@ class RequestOptions(ctypes.Structure):
     ]
 
 
+class MediaEntry(ctypes.Structure):
+    """Mirror of ``NinferMedia`` (apps/capi/ninfer_capi.cpp): one encoded image.
+
+    The engine renders the entries "Picture 1: ...", "Picture 2: ...", in array order,
+    ahead of the user text — so a prompt can refer to them by position without any
+    placeholder syntax on our side.
+    """
+
+    _fields_ = [
+        ("bytes", ctypes.POINTER(ctypes.c_ubyte)),
+        ("len", ctypes.c_int32),
+        ("mime", ctypes.c_char_p),
+    ]
+
+
 class NinferError(RuntimeError):
     """Raised when the native engine reports a failure."""
 
@@ -119,6 +134,25 @@ def _bind(lib: ctypes.CDLL) -> None:
 
     lib.ninfer_destroy.restype = None
     lib.ninfer_destroy.argtypes = [ctypes.c_void_p]
+
+    # Engines built before the multi-image ABI simply lack the export. Feature-detect
+    # here so the node can degrade to the single-image entry point instead of crashing
+    # with an AttributeError deep inside a generation call.
+    try:
+        lib.ninfer_generate_media.restype = ctypes.c_int32
+        lib.ninfer_generate_media.argtypes = [
+            ctypes.c_void_p,             # handle
+            ctypes.c_char_p,             # system text (UTF-8, may be None)
+            ctypes.c_char_p,             # user text (UTF-8)
+            ctypes.POINTER(MediaEntry),  # media array
+            ctypes.c_int32,              # media count
+            ctypes.POINTER(RequestOptions),
+            ctypes.c_char_p,             # out buffer
+            ctypes.c_int32,              # out capacity
+        ]
+        lib.has_generate_media = True
+    except AttributeError:
+        lib.has_generate_media = False
 
 
 def _load_library(dll_path: str) -> ctypes.CDLL:
@@ -214,6 +248,10 @@ class Engine:
             return False
         return bool(self._lib.ninfer_has_vision(self._handle))
 
+    def supports_multi_image(self) -> bool:
+        """True when the loaded binary exports the multi-image entry point."""
+        return bool(getattr(self._lib, "has_generate_media", False))
+
     def generate(self, system: str, user: str, image: bytes | None = None,
                  image_mime: str = "image/jpeg", req: RequestOptions | None = None) -> str:
         if not self._handle:
@@ -226,6 +264,51 @@ class Engine:
             image,
             len(image) if image else 0,
             image_mime.encode("utf-8") if image else None,
+            ctypes.byref(req) if req is not None else None,
+            out,
+            _OUT_CAP,
+        )
+        if written < 0:
+            raise NinferError(self._lib.ninfer_last_error().decode("utf-8", "replace"))
+        return out.value.decode("utf-8", "replace")
+
+    def generate_media(self, system: str, user: str,
+                       images: "list[bytes] | list[tuple[bytes, str]]",
+                       req: RequestOptions | None = None) -> str:
+        """Single-turn generation with 0..N images (needs a multi-image engine build).
+
+        ``images`` items are encoded payloads: plain ``bytes`` (JPEG assumed) or
+        ``(bytes, mime)`` pairs. Entries are numbered by the engine ("Picture 1: ...")
+        in order ahead of the user text, so the prompt refers to them by position.
+        """
+        if not self._handle:
+            raise NinferError("engine has been released")
+        if not self.supports_multi_image():
+            raise NinferError(
+                "this engine binary has no ninfer_generate_media export (it predates "
+                "the multi-image ABI); update bin/ninfer_capi.dll to send more than "
+                "one image")
+
+        entries: list[MediaEntry] = []
+        pins: list = []   # keep every ctypes buffer alive until the native call returns
+        for item in images:
+            data, mime = item if isinstance(item, tuple) else (item, "image/jpeg")
+            buffer = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+            pins.append(buffer)
+            entries.append(MediaEntry(
+                ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
+                len(data),
+                (mime or "image/jpeg").encode("utf-8"),
+            ))
+
+        array = (MediaEntry * len(entries))(*entries) if entries else None
+        out = ctypes.create_string_buffer(_OUT_CAP)
+        written = self._lib.ninfer_generate_media(
+            self._handle,
+            system.encode("utf-8") if system else None,
+            (user or "").encode("utf-8"),
+            array,
+            len(entries),
             ctypes.byref(req) if req is not None else None,
             out,
             _OUT_CAP,

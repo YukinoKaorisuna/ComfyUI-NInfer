@@ -11,6 +11,11 @@ up front:
 - **No LLM server to install** — no Ollama, no llama-server, no HTTP service, no subprocess, zero pip
   packages. The engine is a native DLL loaded straight into ComfyUI via ctypes: it loads once, stays
   resident, and every call after the first costs 0 s.
+- **Vision: images and whole videos** — up to eight image sockets that appear one by one as you wire
+  them, plus a VIDEO input decoded by the engine's bundled FFmpeg (frame sampling at the model's
+  video fps, temporal position encoding — the model can describe a clip and the order of things in
+  it). Models whose name contains "i2i" get the prompt-engineer system prompt automatically;
+  everything else runs prompt-free unless you type one.
 
 ![The two nodes](docs/images/nodes.png)
 
@@ -180,13 +185,16 @@ Full catalogue, mirrors and container-version notes: [docs/MODELS.md](docs/MODEL
 
 ### NInfer Local LLM (.ninfer / Qwen3.8)
 
-`image` is optional: connect one for image-to-prompt, leave it empty for text. Both use the same
-node.
+`image` / `images` / `image3`…`image8` are optional: connect one or several for image-to-prompt —
+new sockets appear one by one as you wire them (up to eight image batches). `video` accepts a VIDEO
+(from Load Video): the engine's bundled FFmpeg decodes it, samples frames at the model's video fps
+and applies temporal position encoding, so the model can describe the clip and the order of things
+in it. Sockets combine freely; everything is sent in one request, pictures numbered ahead of the text.
 
 | Widget | Default | Description |
 |---|---|---|
 | `model` | last one that worked | `.ninfer` files scanned automatically from `ComfyUI/models/LLM` (and the pack's own `models/` folder) — drop a file in, restart ComfyUI, it appears; no path to type |
-| `system_prompt` | prompt-engineer role | keep it identical between runs to help prefix reuse |
+| `system_prompt` | *(empty — AUTO)* | empty = AUTO: only models whose name contains "i2i" get the prompt-engineer role injected; every other model runs with **no** system prompt. Anything typed here always wins |
 | `user_prompt` | | your input |
 | `max_context` | 4096 | the main VRAM lever; 4096 is the safe ceiling on 16 GB |
 | `max_tokens` | 512 | |

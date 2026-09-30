@@ -7,7 +7,11 @@ pipeline, and a resident engine costs 0 s to reuse.
 
 Nodes:
 
-  NInfer Local LLM      generate text from a prompt, optionally with an image (vision)
+  NInfer Local LLM      generate text from a prompt, with any number of images
+                        (vision) or a whole VIDEO (the engine's FFmpeg decodes it,
+                        samples frames at the model's video fps, and applies
+                        temporal position encoding) — connect one IMAGE, a batch,
+                        and/or a video
   NInfer Free VRAM      release the engine(s); pass-through, so it can sit on any link
 
 See README.md for install steps and the VRAM budget on a 16 GB card.
@@ -15,6 +19,7 @@ See README.md for install steps and the VRAM budget on a 16 GB card.
 
 from __future__ import annotations
 
+import os
 import time
 
 from . import _state
@@ -53,7 +58,11 @@ from ._paths import (
 #: bin/, so the arch check must accept it too.
 PREBUILT_ARCHES = ("sm_120", "sm_89")
 
-DEFAULT_SYSTEM_PROMPT = (
+#: Persona used ONLY for the i2i / prompt-rewriter path (images connected and the
+#: system_prompt widget left empty). Never applied to plain-text or video-only
+#: requests — those would otherwise inherit the "prompt engineer" tone, which is
+#: exactly the contamination this default used to cause.
+I2I_SYSTEM_PROMPT = (
     "You are a senior prompt engineer for image and video generation models. "
     "When asked to write a prompt, return only the prompt text itself."
 )
@@ -69,8 +78,93 @@ def _mib(n: float) -> str:
     return f"{n / 2 ** 20:.0f} MiB"
 
 
+def _frames_to_jpeg(batch, max_side: int) -> list[bytes]:
+    """Convert an IMAGE tensor (B,H,W,C float in 0..1) into one JPEG per frame."""
+    count = int(batch.shape[0])
+    return [tensor_to_jpeg(batch[i:i + 1], max_side=max_side) for i in range(count)]
+
+
+def _effective_system_prompt(system_prompt: str, model_label: str) -> str:
+    """Resolve the system prompt for a request.
+
+    Explicit widget text always wins. Otherwise AUTO: only models whose name
+    contains "i2i" (any case — covers pe_i2i_heretic, Qwen-Image-2.1-PE-I2I and
+    any future i2i-named prompt enhancer) get I2I_SYSTEM_PROMPT; every other
+    model runs with NO system prompt, so plain-text / video chats keep their own
+    tone instead of inheriting the prompt-engineer persona.
+    """
+    explicit = (system_prompt or "").strip()
+    if explicit:
+        return explicit
+    if "i2i" in (model_label or "").lower():
+        return I2I_SYSTEM_PROMPT
+    return ""
+
+
+#: File-extension → MIME for the video payloads handed to the engine. Anything
+#: unrecognized falls back to video/mp4 (the engine sniffs the container anyway).
+_VIDEO_MIMES = {
+    "mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime",
+    "webm": "video/webm", "mkv": "video/x-matroska", "avi": "video/x-msvideo",
+}
+
+
+def _video_to_medias(video, max_side: int):
+    """Turn a ComfyUI VIDEO input into engine media entries plus an info label.
+
+    The engine decodes "video/*" payloads itself (its bundled FFmpeg: frame
+    sampling at the model's configured fps, temporal patching, timestamps), so a
+    file-backed VIDEO is handed over as raw bytes with its mime — the highest
+    quality path. Only when the VIDEO object has no file behind it (e.g. it was
+    built from tensors) do we fall back to exporting its frames as JPEGs, which
+    the engine then treats as separate pictures.
+    """
+    try:
+        source = video.get_stream_source()
+    except Exception:
+        source = None
+    if isinstance(source, str) and source.startswith(("http://", "https://")):
+        import urllib.request
+        with urllib.request.urlopen(source, timeout=60) as resp:
+            data = resp.read()
+        return [(data, "video/mp4")], "remote video (%d KiB)" % (len(data) // 1024)
+    if isinstance(source, str) and os.path.exists(source):
+        with open(source, "rb") as fh:
+            data = fh.read()
+        ext = source.rsplit(".", 1)[-1].lower() if "." in source else ""
+        mime = _VIDEO_MIMES.get(ext, "video/mp4")
+        name = source.replace("\\", "/").rsplit("/", 1)[-1]
+        return [(data, mime)], "%s (%d KiB, %s)" % (name, len(data) // 1024, mime)
+    if hasattr(source, "read"):
+        # io.BytesIO (or any readable buffer): in-memory video, mime unknowable.
+        data = source.read()
+        return [(data, "video/mp4")], "in-memory video (%d KiB)" % (len(data) // 1024)
+    frames = None
+    try:
+        frames = getattr(video.get_components(), "images", None)
+    except Exception:
+        frames = None
+    if frames is None:
+        raise NinferError(
+            "The connected VIDEO carries neither a readable file nor frame data.\n"
+            "连接的视频既没有可读的文件路径，也没有帧数据。"
+        )
+    entries = [(b, "image/jpeg") for b in _frames_to_jpeg(frames, max_side)]
+    return entries, "%d frame(s) exported from video object" % len(entries)
+
+
 class NinferLocalLLM:
-    """Single-turn local generation, with an optional image for vision models."""
+    """Single-turn local generation, with up to eight image batches for vision models.
+
+    Image sockets appear progressively: wire one and the next shows up (frontend
+    extension in web/; on frontends without socket hiding all eight simply show at
+    once — the node works either way). Every frame is sent, in order — the engine
+    numbers them Picture 1..N ahead of the text.
+
+    System prompt: leave the widget empty for AUTO — only models whose name contains
+    "i2i" get the prompt-engineer persona injected; all other models run with no
+    system prompt. Text typed into the widget always overrides AUTO.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -85,7 +179,10 @@ class NinferLocalLLM:
                 # Populated by scanning ComfyUI/models/LLM and friends. Adding a model
                 # needs a ComfyUI restart for the dropdown to refresh.
                 "model": (choices, {"default": default_model}),
-                "system_prompt": ("STRING", {"multiline": True, "default": DEFAULT_SYSTEM_PROMPT}),
+                # Leave empty for AUTO: models whose name contains "i2i" (any case)
+                # get I2I_SYSTEM_PROMPT injected, every other model gets NO system
+                # prompt at all. Anything typed here always wins over AUTO.
+                "system_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "user_prompt": ("STRING", {"multiline": True, "default": DEFAULT_USER_PROMPT}),
                 "max_context": ("INT", {"default": 4096, "min": 2048, "max": 131072, "step": 1024}),
                 "max_tokens": ("INT", {"default": 512, "min": 16, "max": 8192, "step": 16}),
@@ -117,7 +214,22 @@ class NinferLocalLLM:
                 "dll_path": ("STRING", {"default": "", "multiline": False}),
             },
             "optional": {
+                # Progressive image sockets (8 total). "image"/"images" keep their
+                # historic names so saved workflows keep working; image3..image8 are
+                # new. All are batches; frames are sent in this listed order. The web/
+                # extension hides every image socket after the first unconnected one
+                # and reveals them one by one as sockets get wired.
                 "image": ("IMAGE",),
+                "images": ("IMAGE",),
+                "image3": ("IMAGE",),
+                "image4": ("IMAGE",),
+                "image5": ("IMAGE",),
+                "image6": ("IMAGE",),
+                "image7": ("IMAGE",),
+                "image8": ("IMAGE",),
+                # A video (from Load Video). The engine decodes it with its bundled
+                # FFmpeg and reads it as a temporal frame sequence. Sent after images.
+                "video": ("VIDEO",),
             },
         }
 
@@ -137,12 +249,15 @@ class NinferLocalLLM:
                  temperature, top_k, top_p, min_p, presence_penalty, frequency_penalty,
                  seed, enable_thinking, vision, mtp_draft_tokens, kv_dtype, embedding_host,
                  image_max_side, keep_loaded, use_cuda_graph=True, free_comfy_vram=True,
-                 auto_recover=True, model_path_override="", dll_path="", image=None):
+                 auto_recover=True, model_path_override="", dll_path="", image=None,
+                 images=None, image3=None, image4=None, image5=None, image6=None,
+                 image7=None, image8=None, video=None):
 
         requested = model_path_override.strip() or model
         model_path = resolve_model(requested)
         if model_path is None:
             raise NinferError(model_setup_hint(requested))
+        system = _effective_system_prompt(system_prompt, requested)
 
         cfg = {
             "dll_path": dll_path.strip(),
@@ -169,17 +284,24 @@ class NinferLocalLLM:
         after = vram_snapshot()
         has_vision = engine.has_vision()
 
-        jpeg = None
-        if image is not None:
-            if not has_vision:
-                raise NinferError(
-                    "An image is connected but the resident engine has no vision encoder.\n"
-                    "Set vision = true, then restart ComfyUI (or run the Free VRAM node) so a "
-                    "new engine gets created.\n"
-                    "连了图像，但当前引擎没有 vision。把 vision 打开，然后重启 ComfyUI"
-                    "（或跑一次「释放显存」节点）让它重建。"
-                )
-            jpeg = tensor_to_jpeg(image, max_side=int(image_max_side))
+        jpegs: list[bytes] = []
+        for img in (image, images, image3, image4, image5, image6, image7, image8):
+            if img is not None:
+                jpegs.extend(_frames_to_jpeg(img, int(image_max_side)))
+        medias: list[tuple] = [(b, "image/jpeg") for b in jpegs]
+        video_info = "none"
+        if video is not None:
+            v_entries, video_info = _video_to_medias(video, int(image_max_side))
+            medias.extend(v_entries)
+        if medias and not has_vision:
+            raise NinferError(
+                "Image(s)/video are connected but the resident engine has no vision "
+                "encoder.\n"
+                "Set vision = true, then restart ComfyUI (or run the Free VRAM node) so a "
+                "new engine gets created.\n"
+                "连了图像/视频，但当前引擎没有 vision。把 vision 打开，然后重启 ComfyUI"
+                "（或跑一次「释放显存」节点）让它重建。"
+            )
 
         request = RequestOptions(
             max_new_tokens=int(max_tokens),
@@ -194,8 +316,29 @@ class NinferLocalLLM:
         )
 
         gen_started = time.perf_counter()
+        multi_note = ""
         try:
-            text = engine.generate(system_prompt, user_prompt, image=jpeg, req=request)
+            if len(medias) >= 2 and not engine.supports_multi_image():
+                # Old engine binaries only take one media payload per request. Downgrade
+                # instead of failing — but say it loudly in the info output. A video
+                # cannot survive this downgrade (the old binary would decode it as a
+                # still image and fail), so it only ever applies to plain images.
+                multi_note = (f"engine binary predates multi-image support; sent media 1 "
+                              f"of {len(medias)} only")
+                text = engine.generate(system, user_prompt,
+                                       image=medias[0][0], image_mime=medias[0][1],
+                                       req=request)
+            elif len(medias) >= 2:
+                text = engine.generate_media(system, user_prompt,
+                                             medias, req=request)
+            elif medias:
+                # Single payload — images and videos alike (mime decides the pipeline).
+                text = engine.generate(system, user_prompt,
+                                       image=medias[0][0], image_mime=medias[0][1],
+                                       req=request)
+            else:
+                text = engine.generate(system, user_prompt,
+                                       image=None, req=request)
         except NinferError as error:
             # Some failures (an architecture mismatch, for instance) only surface on the
             # first kernel launch rather than at engine construction, so they need the same
@@ -221,17 +364,32 @@ class NinferLocalLLM:
         if notes:
             vram = f"{vram} | {notes}" if vram else notes
 
+        if medias:
+            sizes = ", ".join("%d KiB" % (len(b) // 1024) for b, _ in medias)
+            media_info = "%d media (%s)" % (len(medias), sizes)
+        else:
+            media_info = "none"
+
+        if (system_prompt or "").strip():
+            sys_mode = "explicit"
+        elif "i2i" in requested.lower():
+            sys_mode = "auto: i2i persona"
+        else:
+            sys_mode = "auto: none (not an i2i model)"
+
         info = (
             f"load {load_seconds:.2f}s | gen {gen_seconds:.2f}s | {len(text)} chars\n"
             f"model={model_path}\n"
             f"engine={engine.dll_path}  (dll_path widget was {'auto-resolved' if not dll_path.strip() else 'set manually'})\n"
             f"ctx={max_context} | vision={has_vision} | MTP={mtp_draft_tokens} | kv={kv_dtype} | "
             f"graph={'on' if use_cuda_graph else 'off'} | emb_host={'on' if embedding_host else 'off'}\n"
-            f"thinking={'on' if enable_thinking else 'off'} | "
-            f"image={'jpeg %d B' % len(jpeg) if jpeg else 'none'} | "
+            f"thinking={'on' if enable_thinking else 'off'} | system={sys_mode} | "
+            f"media={media_info} | video={video_info} | "
             f"{'released' if released else 'engine kept loaded'}\n"
             f"{vram}"
         )
+        if multi_note:
+            info += f"note: {multi_note}\n"
         return (text, info)
 
 
@@ -301,6 +459,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "NinferLocalLLM": "NInfer Local LLM (.ninfer / Qwen3.8)",
     "NinferUnload": "NInfer Free VRAM (pass-through)",
 }
+
+# Frontend extension (web/ninfer_dynamic_images.js): progressive disclosure of the
+# image sockets — they appear one by one as the ones before them get wired.
+WEB_DIRECTORY = "./web"
 
 # --------------------------------------------------------------------------------------
 # Import-time sanity check — this is the onboarding path most people will see first.
