@@ -24,7 +24,7 @@ up front:
 | | |
 |---|---|
 | OS | Windows x64 |
-| GPU | NVIDIA **RTX 50-series** (`sm_120`), or **RTX 40-series** (`sm_89`, community build, see below) |
+| GPU | NVIDIA **RTX 50-series** (`sm_120`) or **RTX 40-series** (`sm_89`) — required for multi-image and video understanding. 30/20-series community builds are older single-image engines (see the table below) |
 | VRAM | **16 GB minimum** for a ~15 GiB artifact; the official artifacts want 24 GB+ |
 | ComfyUI | any recent version (developed on 0.36) |
 | Python packages | **none** — numpy and Pillow already ship with ComfyUI |
@@ -36,8 +36,8 @@ The engine binary has to match your GPU's compute capability. There are four pre
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [official build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (`sm_120a`) | — |
 | RTX 40-series (4050 Laptop – 4090) | `sm_89` | ✅ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm89` package), all 40-series cards | L4 / L40S are the same `sm_89` — should work, untested |
-| RTX 3000-series (3060 – 3090 Ti), A40 | `sm_86` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm86` package) — **not verified on real hardware** | — |
-| RTX 2000-series (2060 – 2080 Ti) | `sm_75` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm75` package) — **not verified on real hardware**, based on the [community Turing port](https://github.com/mr-september/ninfer-2080ti-22g) | GTX 10-series and older unsupported |
+| RTX 3000-series (3060 – 3090 Ti), A40 | `sm_86` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm86` package) — **not verified on real hardware**. **Old single-image engine: no multi-image, no video** | — |
+| RTX 2000-series (2060 – 2080 Ti) | `sm_75` | ⚠️ [community build](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases) (the `sm75` package) — **not verified on real hardware**, based on the [community Turing port](https://github.com/mr-september/ninfer-2080ti-22g). **Old single-image engine: no multi-image, no video** | GTX 10-series and older unsupported |
 
 > [!NOTE]
 > The `sm86` package was cross-compiled on a Blackwell machine (no 30-series card was available):
@@ -245,6 +245,14 @@ It also releases the engine's ~14 GiB. No other node can do that: the engine's m
 | Free the card after each run | `keep_loaded ✗`, or `NInfer Free VRAM` downstream |
 
 ## VRAM
+
+> [!IMPORTANT]
+> **The engine's VRAM is invisible to ComfyUI's own cleanup — it needs a dedicated release.** The
+> engine allocates its memory with native `cudaMalloc` inside the DLL, so ComfyUI's "Clean VRAM"
+> button and torch's cache emptying never touch it. To actually free the card, run the
+> **NInfer Free VRAM** node (standalone, or spliced into the link right before your sampler), or
+> set `keep_loaded ✗` on the LLM node. Forgetting this is the most common way to end up with a
+> card that still shows ~14 GiB used after every ComfyUI model has been unloaded.
 
 A 27B artifact is a near-capacity fit on a 16 GB card. ComfyUI itself occupies ~1.3 GiB before
 you generate anything, so the fit is decided by a few hundred MiB. Measured on an RTX 5070 Ti

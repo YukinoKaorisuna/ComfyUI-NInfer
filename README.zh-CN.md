@@ -19,7 +19,7 @@
 | | |
 |---|---|
 | 系统 | Windows x64 |
-| 显卡 | NVIDIA **RTX 50 系**（`sm_120`）或 **RTX 40 系**（`sm_89`，社区构建，见下） |
+| 显卡 | NVIDIA **RTX 50 系**（`sm_120`）或 **RTX 40 系**（`sm_89`）——**多图识别与视频理解只有这两类构建支持**；30/20 系社区构建是旧版单图引擎（见下表） |
 | 显存 | 约 15 GiB 的制品**最低 16 GB**；官方制品需要 24 GB 以上 |
 | ComfyUI | 近期版本均可（开发环境 0.36） |
 | Python 包 | **无** —— numpy 和 Pillow 随 ComfyUI 自带 |
@@ -31,8 +31,8 @@
 |---|---|---|---|
 | RTX 5090 / 5080 / 5070 Ti / 5070 | `sm_120` | ✅ [官方构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm_120a`） | — |
 | RTX 40 系（4050 Laptop ~ 4090） | `sm_89` | ✅ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm89` 包），40 系全系通用 | L4 / L40S 同为 `sm_89`，理论可用、未验证 |
-| RTX 30 系（3060 ~ 3090 Ti）、A40 | `sm_86` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm86` 包）—— **未在实机验证** | — |
-| RTX 20 系（2060 ~ 2080 Ti） | `sm_75` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm75` 包）—— **未在实机验证**，源自[社区 Turing 移植](https://github.com/mr-september/ninfer-2080ti-22g) | GTX 10 系及更老不支持 |
+| RTX 30 系（3060 ~ 3090 Ti）、A40 | `sm_86` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm86` 包）—— **未在实机验证**。**旧单图引擎：无多图、无视频** | — |
+| RTX 20 系（2060 ~ 2080 Ti） | `sm_75` | ⚠️ [社区构建](https://github.com/YukinoKaorisuna/ComfyUI-NInfer/releases)（`sm75` 包）—— **未在实机验证**，源自[社区 Turing 移植](https://github.com/mr-september/ninfer-2080ti-22g)。**旧单图引擎：无多图、无视频** | GTX 10 系及更老不支持 |
 
 > [!NOTE]
 > `sm86` 包是在 Blackwell 机器上交叉编译的（构建时没有 30 系卡可用）：Ampere 没有 FP8 tensor core，
@@ -224,6 +224,13 @@ set NINFER_MODEL_DIRS=D:\models
 | 生成完释放显存 | `keep_loaded ✗`，或下游插 `NInfer Free VRAM` |
 
 ## 显存
+
+> [!IMPORTANT]
+> **引擎占用的显存对 ComfyUI 自带的清理是不可见的——必须用专用的释放方式。** 引擎的显存是 DLL
+> 内部原生 `cudaMalloc` 分配的，ComfyUI 的「清理显存」按钮和 torch 的缓存清空都碰不到它。真正
+> 要释放显卡：运行 **NInfer Free VRAM 节点**（单独跑，或串在你采样器前面的连线上），或者把
+> LLM 节点的 `keep_loaded` 关掉。忘了这一步是「ComfyUI 模型都卸了、显存还显示占着 ~14 GiB」
+> 的最常见原因。
 
 27B 制品在 16 GB 卡上是**贴着上限**的。ComfyUI 自身还占约 1.3 GiB，所以成败由几百 MiB 决定。
 以下是在 RTX 5070 Ti（15.92 GiB）上、ComfyUI 同时运行、制品 15.33 GiB 的实测：
